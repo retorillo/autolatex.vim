@@ -5,9 +5,6 @@
 if !exists('g:autolatex#trace')
   let g:autolatex#trace = v:true
 endif
-if !exists('g:autolatex#command')
-  let g:autolatex#command = 'pdflatex'
-endif
 if !exists('g:autolatex#pattern')
   let g:autolatex#pattern = '*.latex'
 endif
@@ -51,7 +48,7 @@ endfunction
 
 function! g:autolatex#dumptrace(file)
   let record = autolatex#findrecord('file', fnamemodify(a:file, ':p'))
-  if type(record) != v:t_dict
+  if empty(record)
     echoerr 'No record found : '. a:file
   else
     for line in record.trace
@@ -78,7 +75,7 @@ function! g:autolatex#latexjobcb(job, status)
   call autolatex#trace(record, 'job exited at status : ' . a:status )
   call autolatex#trace(record, 'job dequeued (left: '. len(record.queue) .')')
   let record.latexjob = v:null
-  if type(record.viewerjob) != v:t_dict
+  if empty(record.viewerjob)
     if a:status == 0
       let record.viewerjob = job_start(g:autolatex#viewer.' "'.record.pdf.'"',
         \ { 'exit_cb': 'g:autolatex#viewerjobcb' })
@@ -172,7 +169,7 @@ function! autolatex#execute(file, internal)
   if !a:internal
     if has_key(s:jobtable, a:file)
       let record = s:jobtable[a:file]
-      if record.latexjob != v:null
+      if !empty(record.latexjob)
         call add(record.queue, 0)
         call autolatex#trace(record, 'job enqueued (left: '. len(record.queue) .')')
         return
@@ -193,9 +190,9 @@ function! autolatex#execute(file, internal)
   let record.lastio = []
   call writefile(getbufline(bufnr(a:file), 1, '$'), record.tempname, "")
   let cd = 'cd "' . fnamemodify(record.tempname, ':h') . '"'
-  let latex = g:autolatex#command . ' -interaction=nonstopmode '
-    \  . '"' . record.tempname . '"'
-  let cmd = 'cmd /c (' . cd . '&' . latex. ')'
+  let uplatex = 'uplatex -interaction=nonstopmode "' . record.tempname . '"'
+  let dvipdfmx = 'dvipdfmx "'. fnamemodify(record.tempname, ':p:r').'.dvi' .'"'
+  let cmd = 'cmd /c (' . join([cd, uplatex, dvipdfmx], ' & ') . ')'
   call autolatex#trace(record, cmd)
   let record.latexjob = job_start(cmd, {
     \ 'callback': 'g:autolatex#callback',
