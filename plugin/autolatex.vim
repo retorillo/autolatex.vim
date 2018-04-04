@@ -3,13 +3,13 @@
 " (C) 2018 Retorillo
 
 if !exists('g:autolatex#trace')
-  let g:autolatex#trace = v:true
+  let g:autolatex#trace = v:false
 endif
 if !exists('g:autolatex#pattern')
   let g:autolatex#pattern = '*.latex'
 endif
 if !exists('g:autolatex#trigger')
-  let g:autolatex#trigger = 'wi'
+  let g:autolatex#trigger = 'wiI'
 endif
 if !exists('g:autolatex#viewer')
   let g:autolatex#viewer = 'texworks'
@@ -18,24 +18,23 @@ if !exists('s:jobtable')
   let s:jobtable = {}
 endif
 
-augroup autolatex
-  autocmd!
-  exec 'autocmd BufWritePost '
-    \ . g:autolatex#pattern
-    \ . " call g:autolatex#onwrite()"
-  exec 'autocmd InsertLeave '
-    \ . g:autolatex#pattern
-    \ . " call g:autolatex#oninsert()"
-augroup END
-
-function! g:autolatex#onwrite()
-  if len(matchstr(g:autolatex#trigger, 'w')) > 0
-    call autolatex#execute(expand('%:p'), v:false)
-  endif
+function! autolatex#init()
+  augroup autolatex
+    autocmd!
+    exec 'autocmd BufWritePost '
+      \ . g:autolatex#pattern
+      \ . " call g:autolatex#onfire('w')"
+    exec 'autocmd InsertLeave '
+      \ . g:autolatex#pattern
+      \ . " call g:autolatex#onfire('i')"
+    exec 'autocmd InsertCharPre '
+      \ . g:autolatex#pattern
+      \ . " call g:autolatex#onfire('I')"
+  augroup END
 endfunction
 
-function! g:autolatex#oninsert()
-  if len(matchstr(g:autolatex#trigger, 'i')) > 0
+function! g:autolatex#onfire(origin)
+  if len(matchstr(g:autolatex#trigger, a:origin)) > 0
     call autolatex#execute(expand('%:p'), v:false)
   endif
 endfunction
@@ -63,8 +62,11 @@ function! g:autolatex#viewerjobcb(job, status)
   call g:autolatex#trace(record, a:job . ' : ' . 'viwer job is exited')
 endfunction
 
-function! g:autolatex#latexjobcb(job, status)
+function! g:autolatex#latexjobcb(job, status) abort
   let record = autolatex#findrecord('latexjob', a:job)
+  if empty(record)
+    throw 'record is empty for "' . a:job . '"'
+  endif
   " TODO: Should delete on exit or close file
   " call delete(record.tempname)
   try
@@ -92,16 +94,19 @@ function! autolatex#findrecord(property, obj)
   if a:property == 'channel'
     for key in keys(s:jobtable)
       let record = s:jobtable[key]
-      let channel = job_getchannel(record.latexjob)
-      if channel == a:obj
+      if record.latexjob != v:null &&
+        \ job_getchannel(record.latexjob) == a:obj
         return record
       endif
     endfor
   else
     for key in keys(s:jobtable)
       let record = s:jobtable[key]
-      if record[a:property] == a:obj
+      let v = record[a:property]
+      if v == a:obj
         return record
+      else
+        echomsg "Does not equals " . a:obj . type(a:obj) . " and ". v . type(v)
       endif
     endfor
   endif
@@ -115,6 +120,17 @@ function! autolatex#updatequickfix(record)
   let msg = []
   let lnum = -1
   let errnr = 0
+  let T = { -> v:true }
+  let P = { -> T(add(qflist, {
+        \ 'type': 'E',
+        \ 'bufnr': bufnr,
+        \ 'lnum': lnum,
+        \ 'text': join(msg, ' : ')
+        \ }))
+        \ && T(execute('let errnr = errnr + 1'))
+        \ && T(execute('let msg = []'))
+        \ && T(execute('let lum = -1'))
+        \ }
   for line in a:record.lastio
     let m = matchlist(line, '\v^\!\s+(.+)$')
     if !empty(m)
@@ -126,32 +142,16 @@ function! autolatex#updatequickfix(record)
     endif
     let m = matchlist(line, '\v^l\.([0-9]+)\s+(.+)$')
     if !empty(m)
-      let errnr = errnr + 1
       let lnum = str2nr(m[1])
       call add(msg, m[2])
-      call add(qflist, {
-        \ 'bufnr': bufnr,
-        \ 'lnum': lnum,
-        \ 'text': join(msg, ' : '),
-        \ 'type': 'E',
-        \ })
-      let msg = []
-      let lnum = -1
+      call P()
       continue
     endif
   endfor
-  " TODO: better implementation
   if !empty(msg)
-    let errnr = errnr + 1
-    call add(qflist, {
-      \ 'bufnr': bufnr,
-      \ 'lnum': lnum,
-      \ 'text': join(msg, ' : '),
-      \ 'type': 'E',
-      \ })
+    call P()
   endif
   call setqflist(qflist)
-
   if errnr > 0
     echohl Error
     echo printf('LaTeX compiling failed with %d errors. Use :clist to check details', errnr)
@@ -161,8 +161,14 @@ endfunction
 
 function! autolatex#callback(channel, message)
   let record = autolatex#findrecord('channel', a:channel)
-  call add(record.lastio, a:message)
-  call autolatex#trace(record, a:channel . ' : ' . a:message)
+  if !empty(record)
+    call add(record.lastio, a:message)
+    call autolatex#trace(record, a:channel . ' : ' . a:message)
+  else
+    " TODO: This code path causes after reset g:latexjob on exit_cb
+    " Note that data can be buffered, callbacks may still be
+		" called after the process ends. (:help job-exit_cb)
+  endif
 endfunction
 
 function! autolatex#execute(file, internal)
@@ -192,9 +198,11 @@ function! autolatex#execute(file, internal)
   let cd = 'cd "' . fnamemodify(record.tempname, ':h') . '"'
   let uplatex = 'uplatex -interaction=nonstopmode "' . record.tempname . '"'
   let dvipdfmx = 'dvipdfmx "'. fnamemodify(record.tempname, ':p:r').'.dvi' .'"'
-  let cmd = 'cmd /c (' . join([cd, uplatex, dvipdfmx], ' & ') . ')'
+  let cmd = 'cmd /c (' . join([cd, uplatex, dvipdfmx], ' && ') . ')'
   call autolatex#trace(record, cmd)
   let record.latexjob = job_start(cmd, {
     \ 'callback': 'g:autolatex#callback',
     \ 'exit_cb' : 'g:autolatex#latexjobcb' } )
 endfunction
+
+call autolatex#init()
