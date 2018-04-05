@@ -14,7 +14,7 @@ endif
 if !exists('g:autolatex#viewer')
   let g:autolatex#viewer = 'texworks'
 endif
-if !exists('g:autolatex#tempextlist')
+if !exists('g:autolatex#tmpextlist')
   let g:autolatex#tmpextlist = ['.aux', '.dvi', '.log', '.pdf']
 endif
 
@@ -109,40 +109,38 @@ function! g:autolatex#dump(file)
   endif
 endfunction
 
-function! g:autolatex#viewerjobcb(job, status)
-  let record = autolatex#findrecord('viewerjob', a:job)
-  if empty(record)
+function! g:autolatex#viewerjobcb(record, job, status)
+  if has_key(a:record, 'disposeinfo')
     return
   endif
-  let record.viewerjob = v:null
+  if record.viewerjob == a:job
+    let record.viewerjob = v:null
+  endif
   call g:autolatex#trace(record, a:job . ' : ' . 'viwer job is exited')
 endfunction
 
-function! g:autolatex#latexjobcb(job, status) abort
-  let record = autolatex#findrecord('latexjob', a:job)
-  if empty(record)
-    throw 'record is empty for "' . a:job . '"'
+function! g:autolatex#latexjobcb(record, job, status)
+  if has_key(a:record, 'disposeinfo')
+    return
   endif
-  " TODO: Should delete on exit or close file
-  " call delete(record.tempname)
   try
-    call remove(record.queue, -1)
+    call remove(a:record.queue, -1)
   catch
     " nop
   endtr
-  call autolatex#trace(record, 'job exited at status : ' . a:status )
-  call autolatex#trace(record, 'job dequeued (left: '. len(record.queue) .')')
-  let record.latexjob = v:null
-  if empty(record.viewerjob)
-    if a:status == 0
-      let record.viewerjob = job_start(g:autolatex#viewer.' "'.record.pdf.'"',
-        \ { 'exit_cb': 'g:autolatex#viewerjobcb' })
-    else
-     call g:autolatex#updatequickfix(record)
+  call autolatex#trace(a:record, 'job exited at status : ' . a:status )
+  call autolatex#trace(a:record, 'job dequeued (left: '. len(a:record.queue) .')')
+  let a:record.latexjob = v:null
+  if a:status == 0
+    if empty(a:record.viewerjob)
+      let a:record.viewerjob = job_start(g:autolatex#viewer.' "'.a:record.pdf.'"',
+        \ { 'exit_cb': { job, status -> g:autolatex#viewerjobcb(a:record, job, status) } })
     endif
+  else
+   call g:autolatex#updatequickfix(a:record)
   endif
-  if len(record.queue) > 0
-    call autolatex#execute(record.file, v:true)
+  if len(a:record.queue) > 0
+    call autolatex#execute(a:record.file, v:true)
   endif
 endfunction
 
@@ -213,16 +211,12 @@ function! autolatex#updatequickfix(record)
   endif
 endfunction
 
-function! autolatex#callback(channel, message)
-  let record = autolatex#findrecord('channel', a:channel)
-  if !empty(record)
-    call add(record.lastio, a:message)
-    call autolatex#trace(record, a:channel . ' : ' . a:message)
-  else
-    " TODO: This code path causes after reset g:latexjob on exit_cb
-    " Note that data can be buffered, callbacks may still be
-    " called after the process ends. (:help job-exit_cb)
+function! autolatex#callback(record, channel, message)
+  if has_key(a:record, 'disposeinfo')
+    return
   endif
+  call add(a:record.lastio, a:message)
+  call autolatex#trace(a:record, a:channel . ' : ' . a:message)
 endfunction
 
 function! autolatex#execute(file, internal)
@@ -255,8 +249,9 @@ function! autolatex#execute(file, internal)
   let cmd = 'cmd /c (' . join([cd, uplatex, dvipdfmx], ' && ') . ')'
   call autolatex#trace(record, cmd)
   let record.latexjob = job_start(cmd, {
-    \ 'callback': 'g:autolatex#callback',
-    \ 'exit_cb' : 'g:autolatex#latexjobcb' } )
+    \ 'callback': { ch, msg -> g:autolatex#callback(record, ch, msg) },
+    \ 'exit_cb' : { ch, msg -> g:autolatex#latexjobcb(record, ch, msg) },
+    \ } )
 endfunction
 
 call autolatex#init()
