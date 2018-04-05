@@ -14,13 +14,27 @@ endif
 if !exists('g:autolatex#viewer')
   let g:autolatex#viewer = 'texworks'
 endif
+if !exists('g:autolatex#tempextlist')
+  let g:autolatex#tmpextlist = ['.aux', '.dvi', '.log', '.pdf']
+endif
+
 if !exists('s:jobtable')
   let s:jobtable = {}
 endif
 
+command! -nargs=0 -bang
+      \ AutolatexInit
+      \ call g:autolatex#init()
+command! -nargs=0 -bang
+      \ AutolatexDump
+      \ call g:autolatex#dump(expand('%:p'))
+
 function! autolatex#init()
   augroup autolatex
     autocmd!
+    exec 'autocmd BufDelete '
+      \ . g:autolatex#pattern
+      \ . " call g:autolatex#onfire(v:null)"
     exec 'autocmd BufWritePost '
       \ . g:autolatex#pattern
       \ . " call g:autolatex#onfire('w')"
@@ -34,8 +48,47 @@ function! autolatex#init()
 endfunction
 
 function! g:autolatex#onfire(origin)
-  if len(matchstr(g:autolatex#trigger, a:origin)) > 0
-    call autolatex#execute(expand('%:p'), v:false)
+  if empty(a:origin)
+    call g:autolatex#clean(expand('%:p'))
+  else
+    if len(matchstr(g:autolatex#trigger, a:origin)) > 0
+      call autolatex#execute(expand('%:p'), v:false)
+    endif
+  endif
+endfunction
+
+function! g:autolatex#cleantemp(tempname)
+  for ext in g:autolatex#tmpextlist
+    let f = fnamemodify(a:tempname, ':r').ext
+    call delete(f)
+  endfor
+  call delete(a:tempname)
+endfunction
+
+function! g:autolatex#clean(file)
+  let record = autolatex#findrecord('file', a:file)
+  if !empty(record)
+    call remove(s:jobtable, record.file)
+    let record.disposeinfo = { 'blockers': [], 'status': 'blocked' }
+    let T = { x -> v:true }
+    let R = {
+      \ r -> T(remove(r.disposeinfo.blockers, -1))
+      \ && empty(r.disposeinfo.blockers)
+      \ && g:autolatex#cleantemp(r.tempname)
+      \ && execute('let r.disposeinfo.status = "finish"')
+      \ }
+    for jobprop in ['viewerjob', 'latexjob']
+      let job = record[jobprop]
+      if job != v:null
+        call add(record.disposeinfo.blockers, 0)
+        call job_setoptions(job, { 'exit_cb': function(R, [record]) })
+        call job_stop(job, 'kill')
+      endif
+    endfor
+    if empty(record.disposeinfo.blockers)
+      call g:autolatex#cleantemp(tempname)
+      let record.disposeinfo.status = 'finish'
+    endif
   endif
 endfunction
 
@@ -45,7 +98,7 @@ function! g:autolatex#trace(record, message)
   endif
 endfunction
 
-function! g:autolatex#dumptrace(file)
+function! g:autolatex#dump(file)
   let record = autolatex#findrecord('file', fnamemodify(a:file, ':p'))
   if empty(record)
     echoerr 'No record found : '. a:file
@@ -58,6 +111,9 @@ endfunction
 
 function! g:autolatex#viewerjobcb(job, status)
   let record = autolatex#findrecord('viewerjob', a:job)
+  if empty(record)
+    return
+  endif
   let record.viewerjob = v:null
   call g:autolatex#trace(record, a:job . ' : ' . 'viwer job is exited')
 endfunction
@@ -105,8 +161,6 @@ function! autolatex#findrecord(property, obj)
       let v = record[a:property]
       if v == a:obj
         return record
-      else
-        echomsg "Does not equals " . a:obj . type(a:obj) . " and ". v . type(v)
       endif
     endfor
   endif
@@ -167,7 +221,7 @@ function! autolatex#callback(channel, message)
   else
     " TODO: This code path causes after reset g:latexjob on exit_cb
     " Note that data can be buffered, callbacks may still be
-		" called after the process ends. (:help job-exit_cb)
+    " called after the process ends. (:help job-exit_cb)
   endif
 endfunction
 
