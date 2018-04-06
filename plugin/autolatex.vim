@@ -2,11 +2,14 @@
 " The MIT License
 " (C) 2018 Retorillo
 
+if !exists('g:autolatex#buildtool')
+  let g:autolatex#buildtool = 'uplatex+dvipdfmx'
+endif
 if !exists('g:autolatex#trace')
   let g:autolatex#trace = v:false
 endif
 if !exists('g:autolatex#pattern')
-  let g:autolatex#pattern = '*.latex'
+  let g:autolatex#pattern = '*.tex,*.latex'
 endif
 if !exists('g:autolatex#trigger')
   let g:autolatex#trigger = 'wiI'
@@ -52,7 +55,12 @@ function! g:autolatex#onfire(origin)
     call g:autolatex#clean(expand('%:p'))
   else
     if len(matchstr(g:autolatex#trigger, a:origin)) > 0
-      call autolatex#execute(expand('%:p'), v:false)
+      try
+        call autolatex#require([g:autolatex#viewer])
+        call autolatex#execute(expand('%:p'), v:false)
+      catch /^Autolatex: /
+        echoerr v:exception
+      endtry
     endif
   endif
 endfunction
@@ -113,10 +121,10 @@ function! g:autolatex#viewerjobcb(record, job, status)
   if has_key(a:record, 'disposeinfo')
     return
   endif
-  if record.viewerjob == a:job
-    let record.viewerjob = v:null
+  if a:record.viewerjob == a:job
+    let a:record.viewerjob = v:null
   endif
-  call g:autolatex#trace(record, a:job . ' : ' . 'viwer job is exited')
+  call g:autolatex#trace(a:record, a:job . ' : ' . 'viwer job is exited')
 endfunction
 
 function! g:autolatex#latexjobcb(record, job, status)
@@ -219,7 +227,15 @@ function! autolatex#callback(record, channel, message)
   call autolatex#trace(a:record, a:channel . ' : ' . a:message)
 endfunction
 
-function! autolatex#execute(file, internal)
+function! autolatex#require(executables) abort
+  for exe in a:executables
+    if !executable(exe)
+      throw printf('Autolatex: Command not found: "%s"', exe)
+    endif
+  endfor
+endfunction
+
+function! autolatex#execute(file, internal) abort
   if !a:internal
     if has_key(s:jobtable, a:file)
       let record = s:jobtable[a:file]
@@ -244,9 +260,19 @@ function! autolatex#execute(file, internal)
   let record.lastio = []
   call writefile(getbufline(bufnr(a:file), 1, '$'), record.tempname, "")
   let cd = 'cd "' . fnamemodify(record.tempname, ':h') . '"'
-  let uplatex = 'uplatex -interaction=nonstopmode "' . record.tempname . '"'
-  let dvipdfmx = 'dvipdfmx "'. fnamemodify(record.tempname, ':p:r').'.dvi' .'"'
-  let cmd = 'cmd /c (' . join([cd, uplatex, dvipdfmx], ' && ') . ')'
+  let cmdset = [ cd ]
+  let latexcmdfmt = '%s -interaction=nonstopmode "%s"'
+  let m = matchlist(g:autolatex#buildtool, '\v&^(u?platex)\+dvipdfmx$')
+  if !empty(m)
+    call autolatex#require([m[1], 'dvipdfmx'])
+    call add(cmdset, printf(latexcmdfmt, m[1], record.tempname))
+    call add(cmdset, printf('dvipdfmx "%s"', fnamemodify(record.tempname, ':p:r').'.dvi'))
+  elseif g:autolatex#buildtool == 'pdflatex'
+    call autolatex#require(['pdflatex'])
+    call add(cmdset, pdflatex = printf(latexcmdfmt, 'pdflatex', record.tempname))
+  endif
+  " TODO: bash for Linux and Mac OS
+  let cmd = printf('cmd /c (%s)', join(cmdset, ' && '))
   call autolatex#trace(record, cmd)
   let record.latexjob = job_start(cmd, {
     \ 'callback': { ch, msg -> g:autolatex#callback(record, ch, msg) },
