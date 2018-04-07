@@ -56,9 +56,8 @@ function! g:autolatex#onfire(origin)
   else
     if len(matchstr(g:autolatex#trigger, a:origin)) > 0
       try
-        call autolatex#require([g:autolatex#viewer])
         call autolatex#execute(expand('%:p'), v:false)
-      catch /^Autolatex: /
+      catch /^Autolatex:/
         echoerr v:exception
       endtry
     endif
@@ -124,7 +123,7 @@ function! g:autolatex#viewerjobcb(record, job, status)
   if a:record.viewerjob == a:job
     let a:record.viewerjob = v:null
   endif
-  call g:autolatex#trace(a:record, a:job . ' : ' . 'viwer job is exited')
+  call g:autolatex#trace(a:record, a:job . ' : ' . 'viewer job is exited')
 endfunction
 
 function! g:autolatex#latexjobcb(record, job, status)
@@ -140,7 +139,7 @@ function! g:autolatex#latexjobcb(record, job, status)
   call autolatex#trace(a:record, 'job dequeued (left: '. len(a:record.queue) .')')
   let a:record.latexjob = v:null
   if a:status == 0
-    if empty(a:record.viewerjob)
+    if empty(a:record.viewerjob) && !empty(g:autolatex#viewer)
       let a:record.viewerjob = job_start(g:autolatex#viewer.' "'.a:record.pdf.'"',
         \ { 'exit_cb': { job, status -> g:autolatex#viewerjobcb(a:record, job, status) } })
     endif
@@ -263,6 +262,7 @@ function! autolatex#execute(file, internal) abort
   let cmdset = [ cd ]
   let latexcmdfmt = '%s -interaction=nonstopmode "%s"'
   let m = matchlist(g:autolatex#buildtool, '\v&^(u?platex)\+dvipdfmx$')
+  call autolatex#require([g:autolatex#viewer])
   if !empty(m)
     call autolatex#require([m[1], 'dvipdfmx'])
     call add(cmdset, printf(latexcmdfmt, m[1], record.tempname))
@@ -270,6 +270,9 @@ function! autolatex#execute(file, internal) abort
   elseif g:autolatex#buildtool == 'pdflatex'
     call autolatex#require(['pdflatex'])
     call add(cmdset, pdflatex = printf(latexcmdfmt, 'pdflatex', record.tempname))
+  else
+    throw printf("Autolatex: Invalid configuration: g:autolatex#buildtool = '%s'",
+      \ g:autolatex#buildtool)
   endif
   " TODO: bash for Linux and Mac OS
   let cmd = printf('cmd /c (%s)', join(cmdset, ' && '))
