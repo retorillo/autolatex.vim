@@ -143,10 +143,10 @@ function! g:autolatex#latexjobcb(record, job, status)
       let a:record.viewerjob = job_start(g:autolatex#viewer.' "'.a:record.pdf.'"',
         \ { 'exit_cb': { job, status -> g:autolatex#viewerjobcb(a:record, job, status) } })
     endif
-  elseif len(a:record.queue) == 0
-    call g:autolatex#updatequickfix(a:record)
   endif
-  if len(a:record.queue) > 0
+  if len(a:record.queue) == 0
+    call g:autolatex#updatequickfix(a:record)
+  else
     call autolatex#execute(a:record.file, v:true)
   endif
 endfunction
