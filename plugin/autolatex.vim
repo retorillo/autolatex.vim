@@ -17,8 +17,8 @@ endif
 if !exists('g:autolatex#viewer')
   let g:autolatex#viewer = 'texworks'
 endif
-if !exists('g:autolatex#tmpextlist')
-  let g:autolatex#tmpextlist = ['.aux', '.dvi', '.log', '.pdf']
+if !exists('g:autolatex#tempsuffixes')
+  let g:autolatex#tempsuffixes = ['.tex', '.out', '.aux', '.dvi', '.log', '.pdf', '_safe.pdf']
 endif
 if !exists('g:autolatex#maxqueue')
   let g:autolatex#maxqueue = 2
@@ -67,12 +67,11 @@ function! g:autolatex#onfire(origin)
   endif
 endfunction
 
-function! g:autolatex#cleantemp(tempname)
-  for ext in g:autolatex#tmpextlist
-    let f = fnamemodify(a:tempname, ':r').ext
+function! g:autolatex#cleantemp(basename)
+  for ext in g:autolatex#tempsuffixes
+    let f = fnamemodify(a:basename, ':r').ext
     call delete(f)
   endfor
-  call delete(a:tempname)
 endfunction
 
 function! g:autolatex#clean(file)
@@ -84,7 +83,7 @@ function! g:autolatex#clean(file)
     let R = {
       \ r -> T(remove(r.disposeinfo.blockers, -1))
       \ && empty(r.disposeinfo.blockers)
-      \ && g:autolatex#cleantemp(r.tempname)
+      \ && g:autolatex#cleantemp(r.basename)
       \ && execute('let r.disposeinfo.status = "finish"')
       \ }
     for jobprop in ['viewerjob', 'latexjob']
@@ -96,7 +95,7 @@ function! g:autolatex#clean(file)
       endif
     endfor
     if empty(record.disposeinfo.blockers)
-      call g:autolatex#cleantemp(tempname)
+      call g:autolatex#cleantemp(record.basename)
       let record.disposeinfo.status = 'finish'
     endif
   endif
@@ -143,7 +142,7 @@ function! g:autolatex#latexjobcb(record, job, status)
   let a:record.latexjob = v:null
   if a:status == 0
     if empty(a:record.viewerjob) && !empty(g:autolatex#viewer)
-      let a:record.viewerjob = job_start(g:autolatex#viewer.' "'.a:record.pdf.'"',
+      let a:record.viewerjob = job_start(g:autolatex#viewer.' "'.a:record.safename.'"',
         \ { 'exit_cb': { job, status -> g:autolatex#viewerjobcb(a:record, job, status) } })
     endif
   endif
@@ -247,11 +246,13 @@ function! autolatex#execute(file, internal) abort
         return
       endif
     else
-      let tempname = fnamemodify(tempname(), ':p:r').'.tex'
+      let basename = fnamemodify(tempname(), ':p:r')
+      let tempname = basename.'.tex'
+      let safename = basename.'_safe.pdf'
       let record = { 'file': a:file,
-        \ 'tempname': tempname, 'queue': [ 0 ],
+        \ 'basename': basename, 'tempname': tempname,
+        \ 'safename': safename, 'queue': [ 0 ],
         \ 'latexjob': v:null, 'lastio': [], 'trace': [],
-        \ 'pdf': fnamemodify(tempname, ':p:r').'.pdf',
         \ 'viewerjob': v:null }
       let s:jobtable[a:file] = record
       call autolatex#trace(record, 'record initialized')
@@ -269,7 +270,7 @@ function! autolatex#execute(file, internal) abort
   if !empty(m)
     call autolatex#require([m[1], 'dvipdfmx'])
     call add(cmdset, printf(latexcmdfmt, m[1], record.tempname))
-    call add(cmdset, printf('dvipdfmx "%s"', fnamemodify(record.tempname, ':p:r').'.dvi'))
+    call add(cmdset, printf('dvipdfmx "%s"', record.basename.'.dvi'))
   elseif g:autolatex#buildtool == 'pdflatex'
     call autolatex#require(['pdflatex'])
     call add(cmdset, pdflatex = printf(latexcmdfmt, 'pdflatex', record.tempname))
@@ -277,7 +278,8 @@ function! autolatex#execute(file, internal) abort
     throw printf("Autolatex: Invalid configuration: g:autolatex#buildtool = '%s'",
       \ g:autolatex#buildtool)
   endif
-  " TODO: bash for Linux and Mac OS
+  " TODO: bash and cp for Linux and Mac OS
+  call add(cmdset, printf('copy /B /Y "%s" "%s"', record.basename.'.pdf', record.safename))
   let cmd = printf('cmd /c (%s)', join(cmdset, ' && '))
   call autolatex#trace(record, cmd)
   let record.latexjob = job_start(cmd, {
