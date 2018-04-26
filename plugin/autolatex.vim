@@ -20,6 +20,9 @@ endif
 if !exists('g:autolatex#tmpextlist')
   let g:autolatex#tmpextlist = ['.aux', '.dvi', '.log', '.pdf']
 endif
+if !exists('g:autolatex#maxqueue')
+  let g:autolatex#maxqueue = 2
+endif
 
 if !exists('s:jobtable')
   let s:jobtable = {}
@@ -238,7 +241,7 @@ function! autolatex#execute(file, internal) abort
   if !a:internal
     if has_key(s:jobtable, a:file)
       let record = s:jobtable[a:file]
-      if !empty(record.latexjob)
+      if !empty(record.latexjob) && len(record.queue) < g:autolatex#maxqueue
         call add(record.queue, 0)
         call autolatex#trace(record, 'job enqueued (left: '. len(record.queue) .')')
         return
