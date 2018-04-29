@@ -23,7 +23,9 @@ endif
 if !exists('g:autolatex#maxqueue')
   let g:autolatex#maxqueue = 2
 endif
-
+if !exists('g:autolatex#maxerror')
+  let g:autolatex#maxerror = 10
+endif
 if !exists('s:jobtable')
   let s:jobtable = {}
 endif
@@ -180,6 +182,7 @@ function! autolatex#updatequickfix(record)
   let qflist = filter(qflist, 'v:val.bufnr != bufnr')
   let msg = []
   let lnum = -1
+  let dumped = 0
   let errnr = 0
   let T = { -> v:true }
   let P = { -> T(add(qflist, {
@@ -203,9 +206,18 @@ function! autolatex#updatequickfix(record)
     endif
     let m = matchlist(line, '\v^l\.([0-9]+)\s+(.+)$')
     if !empty(m)
-      let lnum = str2nr(m[1])
+      let last_lnum = str2nr(m[1])
+      let lnum = last_lnum
+      let dumped = dumped + 1
       call add(msg, m[2])
       call P()
+      if dumped >= g:autolatex#maxerror
+        let msg = [printf('LaTeX errors has reached maximum size limit (%d) and been truncated.',
+          \ g:autolatex#maxerror)]
+        let lnum = last_lnum
+        call P()
+        break
+      endif
       continue
     endif
   endfor
@@ -264,7 +276,12 @@ function! autolatex#execute(file, internal) abort
   call writefile(getbufline(bufnr(a:file), 1, '$'), record.tempname, "")
   let cd = 'cd "' . fnamemodify(record.tempname, ':h') . '"'
   let cmdset = [ cd ]
-  let latexcmdfmt = '%s -interaction=nonstopmode "%s"'
+  let latexcmdfmtbld = ['%s', '-interaction=nonstopmode']
+  if g:autolatex#maxerror <= 1
+    call add(latexcmdfmtbld, '-halt-on-error')
+  endif
+  call add(latexcmdfmtbld, '"%s"')
+  let latexcmdfmt = join(latexcmdfmtbld, ' ')
   let m = matchlist(g:autolatex#buildtool, '\v&^(u?platex)\+dvipdfmx$')
   call autolatex#require([g:autolatex#viewer])
   if !empty(m)
